@@ -1,0 +1,636 @@
+---
+title: "Projet_Data_mining"
+output: html_document
+date: "2025-11-05"
+---
+
+
+#Importation, visualisation et prétraitement
+
+```{r}
+
+# Chargement des library necessaires 
+library(readr)
+library(dplyr)
+library(zoo)
+library(ggplot2)
+library(class)
+library(rpart)
+library(MASS)
+
+
+#croissance <- read.csv("croissance.csv")
+
+croissance$ind<-as.factor(croissance$ind)
+croissance$sexe<-as.factor(croissance$sexe)
+summary(croissance)
+
+#Gestion des variables manquantes
+n<-nrow(croissance)
+#visualisation des données manquantes de sexe
+manquantes_sexe<-is.na(croissance$sexe)
+voir<-croissance[manquantes_sexe,]
+#Sexe: on écrit une fonction qui impute la valeur du sexe si l'indice de la personne correspond à celui de la case précédente ou suivante
+
+for(i in 2:n){   # on commence à 2 pour éviter i-1
+  if(is.na(croissance$sexe[i])){
+    
+    if(croissance$ind[i] == croissance$ind[i-1]) {
+      croissance$sexe[i] <- croissance$sexe[i-1]
+      
+    } else {
+      croissance$sexe[i] <- croissance$sexe[i+1]
+    }
+  }
+}
+```
+
+#Traitement de données manquante au niveau de la taille et du poids (interpolation spline cubique)
+
+```{r}
+data<-croissance
+data<- data %>%
+  group_by(ind) %>%
+  arrange(age) %>%
+  mutate(
+    taille = na.spline(taille, na.rm = FALSE),
+    poids  = na.spline(poids, na.rm = FALSE)
+  )
+
+```
+
+
+#Analyse descriptive et visuels
+
+```{r}
+# Statistiques par sexe
+stats_sexe <- data %>%
+  group_by(sexe) %>%
+  summarise(
+    n_individus = n_distinct(ind),
+    age_min = min(age),
+    age_max = max(age),
+    taille_moyenne = mean(taille),
+    poids_moyen = mean(poids)
+  )
+
+```
+
+```{r}
+# Calcul de l'IMC
+data <- data %>%
+  mutate(IMC = poids / (taille/100)^2)
+```
+
+```{r}
+# Graphique 1 : Courbes de croissance par sexe (selon la taille et l'age)
+
+ggplot(data, aes(x = age, y = taille, color = sexe)) +
+  geom_smooth(se = FALSE, size = 1.5) +
+  labs(
+    title = "Évolution de la taille selon l'âge et le sexe",
+    x = "Âge (années)",
+    y = "poids (cm)"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+# Graphique 2 : Courbes de croissance par sexe (Poids selon l'âge)
+
+ggplot(data, aes(x = age, y = poids, color = sexe)) +
+  geom_smooth(se = FALSE, size = 1.3) +
+  labs(
+    title = "Évolution du poids selon l'âge et le sexe",
+    x = "Âge (années)",
+    y = "Poids (kg)"
+  ) +
+  theme_minimal()
+
+```
+
+
+```{r}
+# Graphique 3 : Répartition de l'IMC selon l'âge et le sexe
+ggplot(data, aes(x = age, y = IMC, color = sexe)) +
+  geom_point(size = 2, alpha = 0.3) +   # Points d'abord
+  geom_hline(yintercept = 18, color = "red", linetype = "dashed", size = 1) +
+  geom_hline(yintercept = 35, color = "red", linetype = "dashed", size = 1) +
+  labs(
+    title = "Répartition de l'IMC selon l'âge et le sexe",
+    x = "Âge (années)",
+    y = "IMC"
+  ) +
+  theme_minimal()
+
+```
+
+#Réorganisation de l'âge par année
+
+```{r}
+#Quand l'age est supérieur à 18, on ramène à 18
+data$age[data$age > 18] <- 18 
+#quand l'âge est inférieur à 1 , on lui impute la valeur 1
+data$age[data$age < 1] <- 1 
+
+#La fonction "floor" permet d'arrondir par défaut
+data$age <- floor(data$age)
+
+
+summary(data$age)
+
+
+```
+
+
+```{r}
+age<- data %>%
+  arrange(age) %>%
+  group_by(age) 
+```
+
+
+```{r}
+#Sur les graphes précédents, on semble observer qu'en fonction de l'âge, le poids et la taille d'un garçon et d'une fille sont différents
+
+#Pour celà, on va effectuer des tests statistiques pour évaluer si ces différences sont significatives
+
+
+
+summary(data$age)
+
+res <- age %>%
+  group_by(age) %>% 
+  summarise(
+    t_taille = t.test(taille ~ sexe)$p.value,
+    t_poids  = t.test(poids ~ sexe)$p.value
+  )
+
+
+result_poids <- age %>%
+  group_by(age) %>% 
+  summarise(
+    p_value = t.test(poids ~ sexe)$p.value,
+    significatif = ifelse(p_value < 0.05, "Oui", "Non")
+  )
+
+result_taille <- age %>%
+  group_by(age) %>% 
+  summarise(
+    p_value = t.test(taille ~ sexe)$p.value,
+    significatif = ifelse(p_value < 0.05, "Oui", "Non")
+  )
+
+ggplot(result_poids, aes(x = age, y = significatif)) + 
+  geom_point()
+
+ggplot(result_taille, aes(x = age, y = significatif)) + 
+  geom_point()
+```
+#Classification supervisée pour répondre à la problèmatique
+
+```{r}
+#création de la colonne contenant la valeur de l'IMC
+IMC <- age %>%
+  mutate(val_IMC = case_when(
+    IMC > 35 ~ "Superieur",
+    IMC < 18 ~ "Bas",
+    TRUE     ~ "Normal"
+  ))
+```
+
+```{r}
+colnames(IMC)
+IMC$val_IMC<-as.factor(IMC$val_IMC)
+
+colonnes_X<-c("age", "taille","poids")
+colonne_Z<-"sexe"
+X_train<- IMC[,colonnes_X]
+z_train <- IMC$sexe
+
+
+
+
+library(class)
+res_knn <-knn(X_train,X_train,z_train,k=3)
+res_knn
+
+# prédiction knn
+res_predicted_knn <- res_knn
+
+
+#arbre de décision
+library(rpart)
+
+
+res_rpart <- rpart(sexe~age+taille+poids,data =IMC)
+#Prédiction arbre de décision
+res_predict_rpart<- predict(res_rpart,type="class")
+res_predict_rpart
+
+#représentation de l'arbre de décision
+#install.packages("rattle")
+#library(rattle)
+fancyRpartPlot(res_predict_rpart)
+
+
+#regression logistique
+res_glm <- glm(sexe~age+taille+poids,data =IMC,family=binomial(logit))
+
+#prédiction
+res_predicted_glm <- ifelse(res_glm$fitted.values < 0.5,
+levels(IMC$sexe)[1], levels(IMC$sexe)[2])
+
+#classifieur bayésien naif
+
+library(e1071)
+res_naiveBayes <- naiveBayes(sexe~age+taille+poids,data =IMC)
+#prédiction CBN
+res_predicted_bayes <- predict(res_naiveBayes,newdata =IMC)
+
+
+#adl
+library(MASS)
+res_lda <- lda(sexe~age+taille+poids,data =IMC)
+
+res_predict <- predict(res_lda)
+res_predict_adl<-res_predict$class
+
+#adq
+res_qda <- qda(sexe~age+taille+poids,data =IMC)
+
+res_predict_21 <- predict(res_qda)
+res_predict_qda<-res_predict_21$class
+```
+
+
+```{r}
+exactitude_knn <- mean(IMC$sexe ==res_knn)
+
+exactitude_rpart<-mean(IMC$sexe  ==res_predict_rpart)
+
+exactitude_glm<-mean(IMC$sexe ==res_predicted_glm)
+
+exactitude_lda<-mean(IMC$sexe  ==res_predict_adl)
+
+exactitude_qda<-mean(IMC$sexe  ==res_predict_qda)
+
+exactitude_cbn<-mean(IMC$sexe  ==res_predicted_bayes)
+
+exactitude<-c(exactitude_knn,exactitude_rpart,exactitude_glm,exactitude_lda,exactitude_qda,exactitude_cbn)
+exactitude
+
+
+#la méthode du knn semble être la méthode la plus adaptée avec une exactitude de 0.84
+```
+
+#validation croisee
+```{r}
+# Taille de l'echantillon d'apprentissage
+n_train <- floor(n*0.8)
+# Déterminer de manière aléatoire les données de l'échantillon d'apprentissage
+index_train <- sample(n,n_train)
+
+# Séparation de l'échantillon
+data_train <- IMC[index_train,]
+data_test <- IMC[-index_train,]
+z_test<-data_test$sexe
+
+
+```
+
+
+
+
+```{r}
+exactitude_knn<- function(data_train,data_test,colonnes_X,colonne_z,k){
+# Package nécessaire
+library(class)
+  
+  X_train<-data_train[,colonnes_X]
+  X_test<-data_test[,colonnes_X]
+  z_train<-data_train$sexe
+  z_test<-data_test$sexe
+  
+# Ajuster le classifieur
+res_knn <-knn(X_train,X_test,z_train,k=3)
+
+# Extraire les prédictions
+res_predicted_knn <- res_knn
+# Calculer l'indicateur de qualité
+  exactitude <- mean(as.character(z_test) == as.character(res_predicted_knn))
+
+# Retourner le résultat
+return(exactitude)
+}
+exactitude_knn(data_train,data_test, colonnes_X, colonne_z,3)
+
+
+# Nombre de folds (dossiers)
+k <- 5
+# Définir les compartiments de données
+folds <- sample(rep(1:k,each=n/k))
+# Définir un objet qui contiendra les résultats intermédiaires
+res_kfold <- rep(NA,k)
+# Boucler sur les dossiers de données à isoler successivement
+for(fold in 1:k){
+# Isoler le dossier de données dans l'échantillon de test
+index_test <- which(folds == fold)
+data_train_kfold <- IMC[-index_test,]
+data_test_kfold <- IMC[index_test,]
+# Classification sur données d'apprentissage + indicateur sur données de test
+res_kfold[fold] <- exactitude_knn(data_train_kfold,data_test_kfold,
+colonnes_X,colonne_Z)
+}
+
+exactitude_knn_kfold <- mean(res_kfold)
+
+```
+
+
+
+
+```{r}
+#exécution de la validation croisée
+#arbre de décision
+#fonction
+colonnes_X<-c("age", "taille","poids")
+colonne_Z<-"sexe"
+exactitude_rpart <- function(data_train,data_test,colonnes_X,colonne_Z){
+# Package nécessaire
+library(rpart)
+# Définir la formule d'ajustement
+formule <- as.formula(paste(
+colonne_Z,"~",paste0(colonnes_X,collapse = "+")
+))
+# Ajuster le classifieur
+res_rpart <- rpart(sexe~age+taille+poids,data=data_train)
+# Extraire les prédictions
+res_predict <- predict(res_rpart,newdata = data_test)
+z_new_predicted <-
+apply(res_predict,1,function(v) as.factor(names(which.max(v))))
+# Calculer l'indicateur de qualité
+exactitude <- mean(as.character(z_test) == as.character(z_new_predicted))
+# Retourner le résultat
+return(exactitude)
+}
+exactitude_rpart(data_train,data_test,colonnes_X,colonne_Z)
+
+# Nombre de folds (dossiers)
+k <- 5
+# Définir les compartiments de données
+folds <- sample(rep(1:k,each=n/k))
+# Définir un objet qui contiendra les résultats intermédiaires
+res_kfold <- rep(NA,k)
+# Boucler sur les dossiers de données à isoler successivement
+for(fold in 1:k){
+# Isoler le dossier de données dans l'échantillon de test
+index_test <- which(folds == fold)
+data_train_kfold <- IMC[-index_test,]
+data_test_kfold <- IMC[index_test,]
+# Classification sur données d'apprentissage + indicateur sur données de test
+res_kfold[fold] <- exactitude_rpart(data_train_kfold,data_test_kfold,
+colonnes_X,colonne_Z)
+}
+
+exactitude_krespart <-mean(res_kfold)
+```
+
+
+
+```{r}
+#exécution de la validation croisée
+#regression logistique
+#fonction
+colonnes_X<-c("age", "taille","poids")
+colonne_Z<-"sexe"
+exactitude_glm <- function(data_train,data_test,colonnes_X,colonne_Z){
+# Package nécessaire
+# Définir la formule d'ajustement
+formule <- as.formula(paste(
+colonne_Z,"~",paste0(colonnes_X,collapse = "+")
+))
+# Ajuster le classifieur
+res_glm <- glm(sexe~age+taille+poids,data =data_train,family=binomial(logit))
+#prédiction
+predict_glm<-predict(res_glm,newdata = data_test,type="response")
+res_predicted_glm <- ifelse(predict_glm < 0.5,
+levels(data_train$sexe)[1], levels(data_train$sexe)[2])
+
+# Calculer l'indicateur de qualité
+exactitude <- mean(as.character(z_test) == as.character(res_predicted_glm))
+# Retourner le résultat
+return(exactitude)
+}
+
+# Nombre de folds (dossiers)
+k <- 5
+# Définir les compartiments de données
+folds <- sample(rep(1:k,each=n/k))
+# Définir un objet qui contiendra les résultats intermédiaires
+res_kfold <- rep(NA,k)
+# Boucler sur les dossiers de données à isoler successivement
+for(fold in 1:k){
+# Isoler le dossier de données dans l'échantillon de test
+index_test <- which(folds == fold)
+data_train_kfold <- IMC[-index_test,]
+data_test_kfold <- IMC[index_test,]
+# Classification sur données d'apprentissage + indicateur sur données de test
+res_kfold[fold] <- exactitude_glm(data_train_kfold,data_test_kfold,
+colonnes_X,colonne_Z)
+}
+
+exactitude_kglm<-mean(res_kfold)
+```
+
+```{r}
+#lda
+colonnes_X<-c("age", "taille","poids")
+colonne_Z<-"sexe"
+
+exactitude_lda <- function(data_train,data_test,colonnes_X,colonne_z){
+# Package nécessaire
+library(MASS)
+
+# Définir la formule d'ajustement
+formule <- as.formula(paste(
+colonne_Z,"~",paste0(colonnes_X,collapse = "+")
+))
+# Ajuster le classifieur
+res_lda <- lda(sexe~age+taille+poids,data =data_train)
+
+# Extraire les prédictions
+res_predict <- predict(res_lda)
+res_predict_adl<-res_predict$class
+# Calculer l'indicateur de qualité
+exactitude <- mean(as.character(z_test) == as.character(res_predict_adl))
+# Retourner le résultat
+return(exactitude)
+}
+
+# Nombre de folds (dossiers)
+k <- 5
+# Définir les compartiments de données
+folds <- sample(rep(1:k,each=n/k))
+# Définir un objet qui contiendra les résultats intermédiaires
+res_kfold <- rep(NA,k)
+# Boucler sur les dossiers de données à isoler successivement
+for(fold in 1:k){
+# Isoler le dossier de données dans l'échantillon de test
+index_test <- which(folds == fold)
+data_train_kfold <- IMC[-index_test,]
+data_test_kfold <-IMC[index_test,]
+# Classification sur données d'apprentissage + indicateur sur données de test
+res_kfold[fold] <- exactitude_lda(data_train_kfold,data_test_kfold,
+colonnes_X,colonne_Z)
+}
+
+exactitude_klda<-mean(res_kfold)
+```
+
+
+
+```{r}
+#qda
+
+colonnes_X<-c("age", "taille","poids")
+colonne_Z<-"sexe"
+
+exactitude_qda <- function(data_train,data_test,colonnes_X,colonne_z){
+# Package nécessaire
+library(MASS)
+
+# Définir la formule d'ajustement
+formule <- as.formula(paste(
+colonne_Z,"~",paste0(colonnes_X,collapse = "+")
+))
+# Ajuster le classifieur
+res_qda <- qda(sexe~age+taille+poids,data =data_train)
+
+# Extraire les prédictions
+res_predict <- predict(res_qda,data_test)
+res_predict_qda<-res_predict$class
+# Calculer l'indicateur de qualité
+exactitude <- mean(as.character(data_test[,colonne_z]) == as.character(res_predict_qda))
+# Retourner le résultat
+return(exactitude)
+}
+
+# Nombre de folds (dossiers)
+k <- 5
+# Définir les compartiments de données
+folds <- sample(rep(1:k,each=n/k))
+# Définir un objet qui contiendra les résultats intermédiaires
+res_kfold <- rep(NA,k)
+# Boucler sur les dossiers de données à isoler successivement
+for(fold in 1:k){
+# Isoler le dossier de données dans l'échantillon de test
+index_test <- which(folds == fold)
+data_train_kfold <- IMC[-index_test,]
+data_test_kfold <-IMC[index_test,]
+# Classification sur données d'apprentissage + indicateur sur données de test
+res_kfold[fold] <- exactitude_qda(data_train_kfold,data_test_kfold,
+colonnes_X,colonne_Z)
+}
+
+
+
+exactitude_kqda<-mean(res_kfold)
+
+
+```
+
+
+
+
+```{r}
+#bayésien
+
+colonnes_X<-c("age", "taille","poids")
+colonne_Z<-"sexe"
+exactitude_bayes <- function(data_train,data_test,colonnes_X,colonne_z){
+# Package nécessaire
+library(e1071)
+ # Définir la formule d'ajustement
+formule <- as.formula(paste(
+colonne_Z,"~",paste0(colonnes_X,collapse = "+")
+))
+
+# Ajuster le classifieur
+res_naiveBayes <- naiveBayes(sexe~age+taille+poids,data =data_train)
+
+
+# Extraire les prédictions
+#prédiction CBN
+res_predicted_bayes <- predict(res_naiveBayes,newdata =data_test)
+# Calculer l'indicateur de qualité
+exactitude <- mean(as.character(data_test[,colonne_z]) == as.character(res_predicted_bayes))
+# Retourner le résultat
+return(exactitude)
+}
+
+# Nombre de folds (dossiers)
+k <- 5
+# Définir les compartiments de données
+folds <- sample(rep(1:k,each=n/k))
+# Définir un objet qui contiendra les résultats intermédiaires
+res_kfold <- rep(NA,k)
+# Boucler sur les dossiers de données à isoler successivement
+for(fold in 1:k){
+# Isoler le dossier de données dans l'échantillon de test
+index_test <- which(folds == fold)
+data_train_kfold <- IMC[-index_test,]
+data_test_kfold <- IMC[index_test,]
+# Classification sur données d'apprentissage + indicateur sur données de test
+res_kfold[fold] <- exactitude_bayes(data_train_kfold,data_test_kfold,
+colonnes_X,colonne_Z)
+}
+
+exactitude_kbayes<-mean(res_kfold)
+```
+
+```{r}
+exactitude_k<-c(exactitude_knn_kfold,exactitude_krespart,exactitude_kglm,exactitude_klda,exactitude_kqda,exactitude_kbayes)
+exactitude_k
+
+
+
+#KNN est la méthode la plus appropriée pour répondre à cette problématique
+
+```
+
+#Vérification des enfants de la base qui sont potentiellement malades
+```{r}
+#prédiction sur la base de données et vérification du sexe des individus
+IMC$pred_sexe<-res_predicted_knn
+
+# Détection des enfants ayant potentiellement des problèmes hormonaux
+#ce sont des enfant dont la prédiction du sexe est différente de ce qui est notifié lors de l'enquête et ceux dont la valeur de l'IMC n'est pas normal
+IMC$suspect_hormonal <- (
+  (IMC$sexe != IMC$pred_sexe) | 
+  (IMC$val_IMC != "Normal")
+)
+
+# visualisation des enfants potentiellement malades
+suspects<-which(IMC$suspect_hormonal == TRUE)
+enfants_pb_hormonal <- IMC[suspects, ]
+
+
+nrow(enfants_pb_hormonal)
+
+#On a  environ 81100 enfants pour lesquels il faut vérifier s'ils ne sont pas malades ou pas
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
