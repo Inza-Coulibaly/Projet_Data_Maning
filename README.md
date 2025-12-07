@@ -1,6 +1,6 @@
-# Analyse de la croissance des enfants — Projet BUT 3 Science des Données
-# Parcours : Exploration & Modélisation Statistique
-# Auteur : Dosse Inza COULIBALY
+# Analyse de la croissance des enfants — Projet Science des Données
+## Parcours : Exploration & Modélisation Statistique
+## Auteur : Dosse Inza COULIBALY
 
 # Résumé
 Ce projet analyse les trajectoires de croissance (taille, poids, IMC) d'une cohorte d'enfants (1–18 ans) à partir d'un jeu de données longitudinal. Après nettoyage et harmonisation (interpolation spline), l'étude compare profils filles/garçons, teste 6 méthodes de classification supervisée et retient le meilleur modèle (KNN) pour produire une liste d'enfants à surveiller (IMC extrême et discordance morphologique).
